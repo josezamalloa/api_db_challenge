@@ -20,7 +20,7 @@ aws cloudformation deploy \
     --template-file plantilla.yaml \
     --stack-name reto \
     --capabilities CAPABILITY_NAMED_IAM \
-    --parameter-overrides DBUser=<usuario> DBPassword=<contraseña>
+    --parameter-overrides DBUser=usuario DBPassword=contraseña
 ```
 
 📌 **Reemplaza **usuario** y **contraseña** con las credenciales que deseas utilizar**
