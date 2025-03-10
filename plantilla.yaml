@@ -572,6 +572,27 @@ Resources:
       Action: "lambda:InvokeFunction"
       FunctionName: !Ref HiringDepartments
       Principal: "apigateway.amazonaws.com"
+  
+  RDSInitEventRule:
+    Type: AWS::Events::Rule
+    DependsOn: RDSInitLambda
+    Properties:
+      Name: "RDSInitLambdaScheduled"
+      Description: "Ejecuta RDSInitLambda 2 minutos después de la creación"
+      ScheduleExpression: "rate(2 minutes)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt RDSInitLambda.Arn
+          Id: "RDSInitLambdaTarget"
+
+  LambdaInvokePermissionEventBridge:
+    Type: AWS::Lambda::Permission
+    DependsOn: RDSInitLambda
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref RDSInitLambda
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt RDSInitEventRule.Arn
 
 Outputs:
   S3BucketName:
