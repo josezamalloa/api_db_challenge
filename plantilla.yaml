@@ -541,11 +541,6 @@ Resources:
     Properties:
       RestApiId: !Ref ApiGateway
       StageName: "prod"
-
-  InvokeRDSInitLambda:
-    Type: Custom::InvokeLambda
-    Properties:
-      ServiceToken: !GetAtt RDSInitLambda.Arn
   
   RDSInitWaitCondition:
     Type: AWS::CloudFormation::WaitCondition
