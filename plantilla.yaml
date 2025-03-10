@@ -148,6 +148,7 @@ Resources:
 
   RDSInitLambda:
     Type: AWS::Lambda::Function
+    DependsOn: RDSInstance
     Properties:
       FunctionName: "IniciarRDS"
       Layers: 
@@ -158,40 +159,58 @@ Resources:
       Timeout: 300
       Code:
         ZipFile: |
+          import json
           import mysql.connector
           import os
           import requests
 
           def lambda_handler(event, context):
-              conn = mysql.connector.connect(
-                  host=os.environ['DB_HOST'],
-                  database=os.environ['DB_NAME'],
-                  user=os.environ['DB_USER'],
-                  password=os.environ['DB_PASSWORD']
-              )
-              cur = conn.cursor()
-              cur.execute("""
-                  CREATE TABLE IF NOT EXISTS departments (
-                      id INT PRIMARY KEY,
-                      department VARCHAR(255) NOT NULL
-                  );
-                  CREATE TABLE IF NOT EXISTS jobs (
-                      id INT PRIMARY KEY,
-                      job VARCHAR(255) NOT NULL
-                  );
-                  CREATE TABLE IF NOT EXISTS hired_employees (
-                      id INT PRIMARY KEY,
-                      name VARCHAR(255) NOT NULL,
-                      datetime VARCHAR(255) NOT NULL,
-                      department_id INT REFERENCES departments(id),
-                      job_id INT REFERENCES jobs(id)
-                  );
-              """)
-              conn.commit()
-              cur.close()
-              conn.close()
-              requests.put(os.environ['AWS_WAIT_HANDLE'], data=json.dumps({"Status": "SUCCESS"}))
-              return {"statusCode": 200, "body": "Base de datos inicializada correctamente."}
+              try:
+                  conn = mysql.connector.connect(
+                      host=os.environ['DB_HOST'],
+                      database=os.environ['DB_NAME'],
+                      user=os.environ['DB_USER'],
+                      password=os.environ['DB_PASSWORD']
+                  )
+                  cur = conn.cursor()
+                  cur.execute("""
+                      CREATE TABLE IF NOT EXISTS departments (
+                          id INT PRIMARY KEY,
+                          department VARCHAR(255) NOT NULL
+                      );
+                      CREATE TABLE IF NOT EXISTS jobs (
+                          id INT PRIMARY KEY,
+                          job VARCHAR(255) NOT NULL
+                      );
+                      CREATE TABLE IF NOT EXISTS hired_employees (
+                          id INT PRIMARY KEY,
+                          name VARCHAR(255) NOT NULL,
+                          datetime VARCHAR(255) NOT NULL,
+                          department_id INT REFERENCES departments(id),
+                          job_id INT REFERENCES jobs(id)
+                      );
+                  """)
+                  conn.commit()
+                  cur.close()
+                  conn.close()
+                  
+                  requests.put(os.environ['AWS_WAIT_HANDLE'], data=json.dumps({
+                      "Status": "SUCCESS",
+                      "Reason": "RDS initialized successfully",
+                      "UniqueId": "RDSInitLambda",
+                      "Data": "Completed"
+                  }))
+                  
+                  return {"statusCode": 200, "body": "Base de datos inicializada correctamente."}
+
+              except Exception as e:
+                  requests.put(os.environ['AWS_WAIT_HANDLE'], data=json.dumps({
+                      "Status": "FAILURE",
+                      "Reason": str(e),
+                      "UniqueId": "RDSInitLambda",
+                      "Data": "Error"
+                  }))
+                  return {"statusCode": 500, "body": str(e)}
       Environment:
         Variables:
           DB_HOST: !GetAtt RDSInstance.Endpoint.Address
@@ -534,7 +553,7 @@ Resources:
     DependsOn: RDSInitLambda
     Properties:
       Handle: !Ref RDSInitWaitHandle
-      Timeout: "300"
+      Timeout: "600"
   
   RDSInitWaitHandle:
     Type: AWS::CloudFormation::WaitConditionHandle
