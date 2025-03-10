@@ -165,6 +165,7 @@ Resources:
           import requests
 
           def lambda_handler(event, context):
+              response_data = {}
               try:
                   conn = mysql.connector.connect(
                       host=os.environ['DB_HOST'],
@@ -200,7 +201,9 @@ Resources:
                       "UniqueId": "RDSInitLambda",
                       "Data": "Completed"
                   }))
-                  
+                  response_data["Message"] = "Recurso creado correctamente"
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+
                   return {"statusCode": 200, "body": "Base de datos inicializada correctamente."}
 
               except Exception as e:
@@ -210,6 +213,7 @@ Resources:
                       "UniqueId": "RDSInitLambda",
                       "Data": "Error"
                   }))
+                  cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
                   return {"statusCode": 500, "body": str(e)}
       Environment:
         Variables:
