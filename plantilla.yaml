@@ -1,0 +1,574 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Globant Data Engineering Coding Challenge"
+
+Parameters:
+  DBUser:
+    Type: String
+    Description: "Nombre de usuario para la base de datos"
+  DBPassword:
+    Type: String
+    Description: "Contraseña para la base de datos"
+    NoEcho: true
+
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "data-engineering-challenge-${AWS::AccountId}-globant"
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: DEVPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: DEIGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.0.0.0/24"
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 0, !GetAZs "" ]
+      Tags:
+        - Key: Name
+          Value: DEPublicSubnet
+
+  RDSSubNet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      VpcId: !Ref VPC
+      Tags:
+        -
+          Key: Name
+          Value: DMSLabRDS1
+
+  RDSSubNet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      VpcId: !Ref VPC
+      Tags:
+        -
+          Key: Name
+          Value: DMSLabRDS2
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: DEPublicRT
+
+  Route:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref PublicSubnet
+  SubnetRoute1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref RDSSubNet2
+  SubnetRoute2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref RDSSubNet
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Permitir acceso a RDS desde la VPC"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: "0.0.0.0/0"
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: de-db
+      Engine: mysql
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      PubliclyAccessible: true
+      MultiAZ: false
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DBName: de_db
+      BackupRetentionPeriod: 7
+      Port: 3306
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Grupo de subredes para RDS"
+      SubnetIds:
+        - !Ref RDSSubNet
+        - !Ref RDSSubNet2
+
+  RDSInitLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "IniciarRDS"
+      Layers: 
+        - !Ref LambdaLayer
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import mysql.connector
+          import os
+          import requests
+
+          def lambda_handler(event, context):
+              conn = mysql.connector.connect(
+                  host=os.environ['DB_HOST'],
+                  database=os.environ['DB_NAME'],
+                  user=os.environ['DB_USER'],
+                  password=os.environ['DB_PASSWORD']
+              )
+              cur = conn.cursor()
+              cur.execute("""
+                  CREATE TABLE IF NOT EXISTS departments (
+                      id INT PRIMARY KEY,
+                      department VARCHAR(255) NOT NULL
+                  );
+                  CREATE TABLE IF NOT EXISTS jobs (
+                      id INT PRIMARY KEY,
+                      job VARCHAR(255) NOT NULL
+                  );
+                  CREATE TABLE IF NOT EXISTS hired_employees (
+                      id INT PRIMARY KEY,
+                      name VARCHAR(255) NOT NULL,
+                      datetime VARCHAR(255) NOT NULL,
+                      department_id INT REFERENCES departments(id),
+                      job_id INT REFERENCES jobs(id)
+                  );
+              """)
+              conn.commit()
+              cur.close()
+              conn.close()
+              requests.put(os.environ['AWS_WAIT_HANDLE'], data="SUCCESS")
+              return {"statusCode": 200, "body": "Base de datos inicializada correctamente."}
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt RDSInstance.Endpoint.Address
+          DB_NAME: de_db
+          DB_USER: !Ref DBUser
+          DB_PASSWORD: !Ref DBPassword
+          AWS_WAIT_HANDLE: !Ref RDSInitWaitHandle
+  
+  LambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: DE-lib
+      Description: Librerias adicionales para Lambda
+      Content:
+        S3Bucket: "aws-resources-course"
+        S3Key: "reto/mysql-layer.zip"
+      CompatibleRuntimes:
+        - python3.9
+      LicenseInfo: MIT
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaExecutionRole
+    Properties:
+      FunctionName: "CargaBatch"
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      Layers: 
+        - !Ref LambdaLayer
+      Code:
+        ZipFile: |
+          import json
+          import mysql.connector
+          import os
+          import csv
+          import io
+          import boto3
+          from datetime import datetime
+
+          MAX_RECORDS = 1000
+          S3_BUCKET = os.environ['S3_BUCKET']
+          s3_client = boto3.client('s3')
+
+          def lambda_handler(event, context):
+              try:
+                  if "body" not in event or not event["body"]:
+                      return {
+                          'statusCode': 400,
+                          'body': json.dumps("El cuerpo de la solicitud está vacío")
+                      }
+
+                  content_type = event.get("headers", {}).get("content-type", "")
+                  if content_type != "text/csv":
+                      return {
+                          'statusCode': 400,
+                          'body': json.dumps("Content-Type debe ser text/csv")
+                      }
+                  
+                  file_stream = io.StringIO(event["body"])
+                  table_name = event.get("queryStringParameters", {}).get("table", "")
+                  
+                  if table_name not in ("departments", "jobs", "hired_employees"):
+                      return {
+                          'statusCode': 400,
+                          'body': json.dumps("Tabla no válida")
+                      }
+
+                  timestamp = datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
+                  s3_key = f"uploads/{table_name}/{timestamp}.csv"
+                  s3_client.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=event["body"], ContentType="text/csv")
+                  
+                  conn = mysql.connector.connect(
+                      host=os.environ['DB_HOST'],
+                      database=os.environ['DB_NAME'],
+                      user=os.environ['DB_USER'],
+                      password=os.environ['DB_PASSWORD']
+                  )
+                  cur = conn.cursor()
+                  records = csv.reader(file_stream)
+
+                  row_count = 0
+                  for row in records:
+                      if row_count >= MAX_RECORDS:
+                          break
+                      cur.execute(f"INSERT INTO {table_name} VALUES ({','.join(['%s'] * len(row))})", row)
+                      row_count += 1
+                  
+                  conn.commit()
+                  cur.close()
+                  conn.close()
+
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps(f"Archivo procesado correctamente. Registros insertados: {row_count}, guardado en S3: {s3_key}")
+                  }
+              except Exception as e:
+                  return {
+                      'statusCode': 500,
+                      'body': json.dumps(str(e))
+                  }
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt RDSInstance.Endpoint.Address
+          DB_NAME: de_db
+          DB_USER: !Ref DBUser
+          DB_PASSWORD: !Ref DBPassword
+          S3_BUCKET: !Ref S3Bucket
+
+  QuarterlyHiringReport:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "ReporteTrimestral"
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      Layers: 
+        - !Ref LambdaLayer
+      Code:
+        ZipFile: |
+          import json
+          import mysql.connector
+          import os
+
+          def lambda_handler(event, context):
+              conn = mysql.connector.connect(
+                  host=os.environ['DB_HOST'],
+                  database=os.environ['DB_NAME'],
+                  user=os.environ['DB_USER'],
+                  password=os.environ['DB_PASSWORD']
+              )
+              cur = conn.cursor()
+              query = """
+                  SELECT d.department, j.job, 
+                         QUARTER(h.datetime) AS quarter, 
+                         COUNT(*) AS total_hired
+                  FROM hired_employees h
+                  JOIN departments d ON h.department_id = d.id
+                  JOIN jobs j ON h.job_id = j.id
+                  WHERE YEAR(h.datetime) = 2021
+                  GROUP BY d.department, j.job, QUARTER(h.datetime)
+                  ORDER BY d.department, j.job;
+              """
+              cur.execute(query)
+              results = cur.fetchall()
+              cur.close()
+              conn.close()
+
+              response = [
+                  {"department": row[0], "job": row[1], "quarter": row[2], "total_hired": row[3]} 
+                  for row in results
+              ]
+
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps(response, indent=4)
+              }
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt RDSInstance.Endpoint.Address
+          DB_NAME: de_db
+          DB_USER: !Ref DBUser
+          DB_PASSWORD: !Ref DBPassword
+
+  HiringDepartments:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "ContratacionDepartamentos"
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      Layers: 
+        - !Ref LambdaLayer
+      Code:
+        ZipFile: |
+          import json
+          import mysql.connector
+          import os
+
+          def lambda_handler(event, context):
+              conn = mysql.connector.connect(
+                  host=os.environ['DB_HOST'],
+                  database=os.environ['DB_NAME'],
+                  user=os.environ['DB_USER'],
+                  password=os.environ['DB_PASSWORD']
+              )
+              cur = conn.cursor()
+              query = """
+                  WITH DepartmentHiring AS (
+                      SELECT h.department_id, d.department, COUNT(*) AS total_hired
+                      FROM hired_employees h
+                      JOIN departments d ON h.department_id = d.id
+                      WHERE YEAR(h.datetime) = 2021
+                      GROUP BY h.department_id, d.department
+                  ),
+                  MeanHiring AS (
+                      SELECT AVG(total_hired) AS mean_hiring FROM DepartmentHiring
+                  )
+                  SELECT dh.department_id, dh.department, dh.total_hired
+                  FROM DepartmentHiring dh
+                  JOIN MeanHiring mh ON dh.total_hired > mh.mean_hiring
+                  ORDER BY dh.total_hired DESC;
+              """
+              cur.execute(query)
+              results = cur.fetchall()
+              cur.close()
+              conn.close()
+
+              response = [
+                  {"department_id": row[0], "department": row[1], "total_hired": row[2]} 
+                  for row in results
+              ]
+
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps(response, indent=4)
+              }
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt RDSInstance.Endpoint.Address
+          DB_NAME: de_db
+          DB_USER: !Ref DBUser
+          DB_PASSWORD: !Ref DBPassword
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaExecutionRoleChallenge
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${S3Bucket}/*"
+        - PolicyName: LambdaRDSAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                Resource: "*"
+      ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: "DataEngineeringAPI"
+      Description: "API para cargar archivos y consultar reportes"
+
+  UploadResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: "upload"
+
+  QuarterlyReportResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: "report"
+
+  HiringDepartmentsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: "hiring"
+
+  UploadMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref UploadResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations"
+
+  QuarterlyReportMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref QuarterlyReportResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${QuarterlyHiringReport.Arn}/invocations"
+
+  HiringDepartmentsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref HiringDepartmentsResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HiringDepartments.Arn}/invocations"
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - UploadMethod
+      - QuarterlyReportMethod
+      - HiringDepartmentsMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: "prod"
+
+  InvokeRDSInitLambda:
+    Type: Custom::InvokeLambda
+    Properties:
+      ServiceToken: !GetAtt RDSInitLambda.Arn
+  
+  RDSInitWaitCondition:
+    Type: AWS::CloudFormation::WaitCondition
+    DependsOn: RDSInitLambda
+    Properties:
+      Handle: !Ref RDSInitWaitHandle
+      Timeout: "300"
+  
+  RDSInitWaitHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+
+  LambdaApiPermissionUpload:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref LambdaFunction
+      Principal: "apigateway.amazonaws.com"
+
+  LambdaApiPermissionQuarterlyReport:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref QuarterlyHiringReport
+      Principal: "apigateway.amazonaws.com"
+
+  LambdaApiPermissionHighHiring:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref HiringDepartments
+      Principal: "apigateway.amazonaws.com"
+
+Outputs:
+  S3BucketName:
+    Description: "Bucket S3 donde se almacenan los archivos CSV"
+    Value: !Ref S3Bucket
+
+  RDSInstanceEndpoint:
+    Description: "Endpoint de la base de datos"
+    Value: !GetAtt RDSInstance.Endpoint.Address
+
+  ApiEndpoint:
+    Description: "URL base del API Gateway"
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod"
