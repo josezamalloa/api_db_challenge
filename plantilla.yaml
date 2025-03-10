@@ -190,7 +190,7 @@ Resources:
               conn.commit()
               cur.close()
               conn.close()
-              requests.put(os.environ['AWS_WAIT_HANDLE'], data="SUCCESS")
+              requests.put(os.environ['AWS_WAIT_HANDLE'], data=json.dumps({"Status": "SUCCESS"}))
               return {"statusCode": 200, "body": "Base de datos inicializada correctamente."}
       Environment:
         Variables:
