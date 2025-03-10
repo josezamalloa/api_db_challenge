@@ -23,7 +23,18 @@ aws cloudformation deploy \
     --parameter-overrides DBUser=<usuario> DBPassword=<contraseña>
 ```
 
-📌 **Reemplaza <usuario> y <contraseña> con las credenciales que deseas utilizar**
+📌 **Reemplaza **<usuario>** y **<contraseña>** con las credenciales que deseas utilizar**
+
+### 🚀 **Desactivar la regla de EventBridge después del despliegue**
+Una vez que el stack de CloudFormation se haya creado correctamente, sigue estos pasos para desactivar la regla programada:
+
+1. **Inicia sesión en la Consola de AWS**.
+2. **Ve al servicio EventBridge** (`Amazon EventBridge`).
+3. **Haz clic en "Rules" (Reglas)** en el panel izquierdo.
+4. **Busca la regla llamada `RDSInitLambdaScheduled`**.
+5. **Selecciona la regla y haz clic en "Disable" (Desactivar)**.
+
+📌 **Esto evitará que la función Lambda `RDSInitLambda` se siga ejecutando automáticamente.**
 
 ## 📂 **Uso de la API para carga de archivos**
 
