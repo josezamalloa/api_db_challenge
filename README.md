@@ -26,7 +26,7 @@ aws cloudformation deploy \
 📌 **Reemplaza **usuario** y **contraseña** con las credenciales que deseas utilizar**
 
 ### 🚀 **Desactivar la regla de EventBridge después del despliegue**
-Una vez que el stack de CloudFormation se haya creado correctamente, sigue estos pasos para desactivar la regla programada:
+Una vez que el stack de CloudFormation se haya creado correctamente, esperar 3 minutos, y a continuación, sigue estos pasos para desactivar la regla programada:
 
 1. **Inicia sesión en la Consola de AWS**.
 2. **Ve al servicio EventBridge** (`Amazon EventBridge`).
